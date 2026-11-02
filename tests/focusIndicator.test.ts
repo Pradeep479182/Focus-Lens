@@ -4,11 +4,10 @@ import assert from 'node:assert/strict';
 import {
   calculateFocusIndicator,
   calculateFocusIndicatorFromEvents,
-  DEFAULT_FOCUS_INDICATOR_WEIGHTS,
-  type FocusIndicatorResult,
   type FocusSessionMetricsInput,
 } from '../src/services/focusIndicator.service.ts';
 import { ActivityEventTrackerService } from '../src/services/activityEventTracker.service.ts';
+import type { ActivityEvent } from '../src/types/index.ts';
 
 describe('FocusIndicatorCalculation — Day 19 Verification Scenarios', () => {
   let tracker: ActivityEventTrackerService;
@@ -319,5 +318,48 @@ describe('FocusIndicatorCalculation — Day 19 Verification Scenarios', () => {
 
     // Score: 1.0 * 0.1 + 0.5 * 0.8 + 1.0 * 0.1 = 0.1 + 0.4 + 0.1 = 0.60 -> 60%
     assert.equal(customResult.score, 60);
+  });
+
+  it('calculates screen and posture intervals when lifecycle events are missing', () => {
+    const start = 1_770_000_000_000;
+    const event = (id: string, seconds: number, type: ActivityEvent['type'], category: 'screen_facing' | 'posture', stateValue: string): ActivityEvent => ({
+      id,
+      sessionId: 'session-incomplete-lifecycle',
+      timestamp: start + seconds * 1_000,
+      type,
+      category,
+      stateValue,
+    });
+    const result = calculateFocusIndicatorFromEvents([
+      event('facing-1', 0, 'SCREEN_FACING', 'screen_facing', 'SCREEN_FACING'),
+      event('good-1', 0, 'POSTURE_GOOD', 'posture', 'GOOD_POSTURE'),
+      event('looking-away', 5, 'LOOKING_AWAY', 'screen_facing', 'LOOKING_AWAY'),
+      event('slouched', 7, 'POSTURE_SLOUCHED', 'posture', 'SLOUCHED_POSTURE'),
+      event('good-2', 12, 'POSTURE_GOOD', 'posture', 'GOOD_POSTURE'),
+      event('facing-2', 15, 'SCREEN_FACING', 'screen_facing', 'SCREEN_FACING'),
+    ], 'session-incomplete-lifecycle', {
+      activeDurationSeconds: 20,
+      now: start + 20_000,
+    });
+
+    assert.equal(result.status, 'calculated');
+    assert.equal(result.breakdown.screenFacingRatio, 0.5);
+    assert.equal(result.breakdown.postureRatio, 0.75);
+    assert.equal(result.score, 76.3);
+  });
+
+  it('keeps short and empty event sessions from producing misleading scores', () => {
+    const empty = calculateFocusIndicatorFromEvents([], 'session-empty', {
+      activeDurationSeconds: 1_500,
+    });
+    assert.equal(empty.status, 'insufficient_data');
+    assert.equal(empty.score, null);
+
+    const short = calculateFocusIndicator({
+      sessionId: 'session-short',
+      activeDurationSeconds: 4,
+    });
+    assert.equal(short.status, 'insufficient_data');
+    assert.equal(short.score, null);
   });
 });

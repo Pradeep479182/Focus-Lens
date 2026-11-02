@@ -506,6 +506,13 @@ export function calculateFocusIndicatorFromEvents(
     options?.activeDurationSeconds ??
     Math.max(0, Math.floor((endMs - startMs - pausedIntervalsMs) / 1000));
 
+  const hasLifecycleEvents = sessionEvents.some(
+    (event) => event.category === 'session' || event.type.startsWith('SESSION_'),
+  );
+  if (!hasLifecycleEvents && options?.activeDurationSeconds !== undefined) {
+    endMs = Math.max(endMs, startMs + options.activeDurationSeconds * 1_000);
+  }
+
   // 3. Compute time intervals for screen-facing, posture, and unknown detection
   let screenFacingMs = 0;
   let lookingAwayMs = 0;
@@ -515,7 +522,10 @@ export function calculateFocusIndicatorFromEvents(
   let postureEventCount = 0;
 
   // Track state intervals during active running periods
-  let isRunning = false;
+  // Older/incomplete event sets may contain only detection transitions. In
+  // that case, treat the event range as one active interval instead of
+  // silently discarding every screen and posture observation.
+  let isRunning = !hasLifecycleEvents;
   let lastStateChangeTimeMs = startMs;
   let currentScreenFacing: 'SCREEN_FACING' | 'LOOKING_AWAY' | 'UNKNOWN' = 'UNKNOWN';
   let currentPosture: 'GOOD_POSTURE' | 'SLOUCHED_POSTURE' | 'UNKNOWN' = 'UNKNOWN';
@@ -574,6 +584,19 @@ export function calculateFocusIndicatorFromEvents(
       } else {
         currentPosture = 'UNKNOWN';
       }
+    }
+  }
+
+  // Close the final observed interval when the caller supplies a session end
+  // time (or `now`) but the event stream has no explicit terminal marker.
+  if (isRunning && endMs > lastStateChangeTimeMs) {
+    const deltaMs = endMs - lastStateChangeTimeMs;
+    if (currentScreenFacing === 'SCREEN_FACING') screenFacingMs += deltaMs;
+    else if (currentScreenFacing === 'LOOKING_AWAY') lookingAwayMs += deltaMs;
+    if (currentPosture === 'GOOD_POSTURE') goodPostureMs += deltaMs;
+    else if (currentPosture === 'SLOUCHED_POSTURE') slouchedPostureMs += deltaMs;
+    if (currentScreenFacing === 'UNKNOWN' && currentPosture === 'UNKNOWN') {
+      unknownDetectionMs += deltaMs;
     }
   }
 

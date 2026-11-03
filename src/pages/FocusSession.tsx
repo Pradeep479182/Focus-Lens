@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera, CameraOff, ShieldCheck } from 'lucide-react';
 import type { CameraStatus } from '../services/contracts';
 import { cameraCaptureService } from '../services/cameraCapture.service';
+import { cameraStateLabel } from '../utils/cameraStatusPresentation';
 import { FocusTimer } from '../components/FocusTimer';
 import { useActivityMonitoring } from '../context/useActivityMonitoring';
 
@@ -35,6 +36,7 @@ const FocusSession: React.FC = () => {
 
   const isActive = cameraStatus.state === 'active';
   const isStarting = cameraStatus.state === 'starting' || cameraStatus.state === 'requesting';
+  const cameraLabel = cameraStateLabel(cameraStatus.state);
   const currentAwayEvent = awayState.events[awayState.events.length - 1];
   const awayDurationSeconds = Math.floor(awayState.awayDurationMs / 1_000);
 
@@ -173,7 +175,7 @@ const FocusSession: React.FC = () => {
 
             <div className="camera-details">
               <div>
-                <strong>{isActive ? 'Camera Active' : isStarting ? 'Starting' : 'Disabled'}</strong>
+                <strong>{cameraLabel}</strong>
                 <p role={cameraStatus.message && !isActive ? 'alert' : undefined}>
                   {cameraStatus.message ?? 'Frames process locally on-device.'}
                 </p>

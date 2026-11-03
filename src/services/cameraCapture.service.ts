@@ -12,7 +12,7 @@ type VideoWithFrameCallbacks = HTMLVideoElement & {
 const FRAME_STALL_TIMEOUT_MS = 4_000;
 const FIRST_FRAME_TIMEOUT_MS = 8_000;
 
-class CameraCaptureService {
+export class CameraCaptureService {
   private status: CameraStatus = { state: 'inactive' };
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;

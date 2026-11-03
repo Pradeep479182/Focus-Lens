@@ -55,7 +55,10 @@ The React webview is the only webcam owner. While CV is running, it sends
 downsized JPEG frames to the local Python process through a Tauri subprocess
 pipe. Python processes each frame in memory and emits only derived activity
 signals to the app. Frames are not persisted or sent to a network service.
-Session history and preferences are stored locally in SQLite or device storage.
+The desktop app stores session history and preferences in native SQLite. The
+Vite browser preview uses a separate SQLite database persisted in that browser's
+IndexedDB; browser-preview data is not shared with the desktop app. CV camera
+processing is available only in the Tauri desktop runtime.
 
 ## Product and architecture references
 

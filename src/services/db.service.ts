@@ -1,3 +1,4 @@
+import { isTauri } from '@tauri-apps/api/core';
 import type { ActivityEvent, PersistedSessionStatus, PrivacySettings, Session } from '../types';
 import type { AwayDetectionEvent } from './awayDetection.service';
 
@@ -67,9 +68,13 @@ const PRIVACY_SETTING_KEYS = [
   'dataRetentionDays',
 ] as const satisfies readonly (keyof PrivacySettings)[];
 
-async function loadTauriDatabase(path: string): Promise<SqlConnection> {
-  const { default: Database } = await import('@tauri-apps/plugin-sql');
-  return Database.load(path);
+async function loadLocalDatabase(path: string): Promise<SqlConnection> {
+  if (isTauri()) {
+    const { default: Database } = await import('@tauri-apps/plugin-sql');
+    return Database.load(path);
+  }
+  const { loadBrowserDatabase } = await import('./browserDatabase.service');
+  return loadBrowserDatabase(path);
 }
 
 export class LocalDatabaseService {
@@ -78,7 +83,7 @@ export class LocalDatabaseService {
   private connection: SqlConnection | null = null;
   private initialization: Promise<void> | null = null;
 
-  constructor(loader: SqlDatabaseLoader = loadTauriDatabase, path = DATABASE_PATH) {
+  constructor(loader: SqlDatabaseLoader = loadLocalDatabase, path = DATABASE_PATH) {
     this.loader = loader;
     this.path = path;
   }

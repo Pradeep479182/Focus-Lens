@@ -2,11 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera, CameraOff, ShieldCheck } from 'lucide-react';
 import type { CameraStatus } from '../services/contracts';
 import { cameraCaptureService } from '../services/cameraCapture.service';
-<<<<<<< HEAD
 import { cameraStateLabel } from '../utils/cameraStatusPresentation';
-=======
 import { cvService } from '../services/cv.service';
->>>>>>> 08644c3fcf1b0e530841bf46c1390ea903c1e4c1
 import { FocusTimer } from '../components/FocusTimer';
 import { useActivityMonitoring } from '../context/useActivityMonitoring';
 

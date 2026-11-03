@@ -506,6 +506,59 @@ describe('Local SQLite database and repositories', () => {
     }
   });
 
+  it('deletes expired terminal sessions and cascades their events without deleting recent or active sessions', async () => {
+    const { testDatabase, database, sessions, events } = await setup();
+    const now = Date.parse('2026-10-15T00:00:00.000Z');
+    const cutoff = '2026-09-15T00:00:00.000Z';
+    try {
+      await sessions.create({ ...runningSession(SESSION_1), startedAt: '2026-09-01T00:00:00.000Z' });
+      await sessions.complete(SESSION_1, '2026-09-14T23:59:59.999Z', 60);
+      await sessions.create({ ...runningSession(SESSION_2), startedAt: '2026-09-01T00:00:00.000Z' });
+      await sessions.complete(SESSION_2, cutoff, 60);
+      await sessions.create({ ...runningSession(SESSION_PAUSED), startedAt: '2026-10-01T00:00:00.000Z' });
+      await sessions.complete(SESSION_PAUSED, '2026-10-14T00:00:00.000Z', 60);
+      await sessions.create(runningSession(SESSION_MISSING));
+
+      const event: AwayDetectionEvent = {
+        id: 'away-event-expired',
+        sessionId: SESSION_1,
+        type: 'away',
+        timestamp: now - 60_000,
+        awayStartedAt: now - 120_000,
+        thresholdReachedAt: now - 60_000,
+        endedAt: null,
+        duration: 60,
+      };
+      await events.record(event);
+
+      assert.equal(await sessions.deleteExpired(30, now), 1);
+      assert.equal(await sessions.getById(SESSION_1), null);
+      assert.equal((await events.listBySession(SESSION_1)).length, 0);
+      assert.ok(await sessions.getById(SESSION_2), 'session at the cutoff must be retained');
+      assert.ok(await sessions.getById(SESSION_PAUSED), 'recent terminal session must be retained');
+      assert.equal((await sessions.getById(SESSION_MISSING))?.status, 'running');
+    } finally {
+      await database.close();
+      testDatabase.cleanup();
+    }
+  });
+
+  it('rejects invalid session-retention values and clocks', async () => {
+    const { testDatabase, database, sessions } = await setup();
+    try {
+      for (const days of [-1, 3_651, 0.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        await assert.rejects(sessions.deleteExpired(days), /whole number between 0 and 3650 days/);
+      }
+      await assert.rejects(
+        sessions.deleteExpired(30, Number.NaN),
+        /clock must return a finite timestamp/,
+      );
+    } finally {
+      await database.close();
+      testDatabase.cleanup();
+    }
+  });
+
   it('exposes repository operations through the session service', async () => {
     const { testDatabase, database, sessionService } = await setup();
     try {

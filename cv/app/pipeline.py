@@ -69,7 +69,7 @@ def _emit_signal(signal: Dict[str, Any]) -> None:
         "confidence": signal.get("confidence", 0.0),
         "timestamp": signal.get("timestamp", time.time()),
         "posture_reminder": bool(signal.get("posture_reminder", False)),
-        "occurred_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "occurred_at": datetime.datetime.now(datetime.timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     try:
         line = json.dumps(safe, separators=(",", ":"))
@@ -219,7 +219,14 @@ class CVPipeline:
                     image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
                     if image is None or image.shape[1] != width or image.shape[0] != height:
                         raise ValueError("JPEG payload dimensions do not match frame metadata.")
-                except (KeyError, TypeError, ValueError, binascii.Error, json.JSONDecodeError) as exc:
+                except (
+                    KeyError,
+                    TypeError,
+                    ValueError,
+                    binascii.Error,
+                    json.JSONDecodeError,
+                    cv2.error,
+                ) as exc:
                     log.warning("Ignoring invalid host camera frame: %s", exc)
                     continue
 
@@ -231,8 +238,8 @@ class CVPipeline:
                         height=height,
                     )
                 )
-        except (OSError, UnicodeError) as exc:
-            log.error("Unable to read host camera frames: %s", exc)
+        except Exception as exc:
+            log.exception("Host camera CV pipeline failed.")
             _emit_cv_status("failed", str(exc))
         finally:
             self._teardown()

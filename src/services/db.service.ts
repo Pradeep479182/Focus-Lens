@@ -358,6 +358,36 @@ export class SessionRepository {
     return result.rowsAffected === 1;
   }
 
+  async deleteExpired(retentionDays: number, now = Date.now()): Promise<number> {
+    if (!Number.isInteger(retentionDays) || retentionDays < 0 || retentionDays > 3_650) {
+      throw new Error('Session retention must be a whole number between 0 and 3650 days.');
+    }
+    if (!Number.isFinite(now)) {
+      throw new Error('Session retention clock must return a finite timestamp.');
+    }
+    const cutoff = new Date(now - retentionDays * 86_400_000).toISOString();
+    let deleted = 0;
+
+    while (true) {
+      const expired = await this.database.select<Array<{ id: string }>>(
+        `SELECT id FROM sessions
+         WHERE status IN ('completed', 'cancelled', 'interrupted')
+           AND ended_at < $1
+         ORDER BY ended_at ASC, id ASC
+         LIMIT 500`,
+        [cutoff],
+      );
+      if (expired.length === 0) {
+        return deleted;
+      }
+      for (const session of expired) {
+        if (await this.delete(session.id)) {
+          deleted += 1;
+        }
+      }
+    }
+  }
+
   private async transitionTerminal(
     id: string,
     status: 'completed' | 'cancelled',

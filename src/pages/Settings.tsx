@@ -15,8 +15,7 @@ import {
   isWellnessNotificationSupported,
   requestWellnessNotificationPermission,
 } from '../services/wellnessNotification.service';
-import { privacySettingsRepository } from '../services/db.service';
-import type { PrivacySettings } from '../types';
+import { privacySettingsRepository, sessionRepository } from '../services/db.service';
 import { PrivacyControlsSection } from '../components/PrivacyControlsSection';
 import NotificationBreakSection from '../components/NotificationBreakSection';
 
@@ -38,11 +37,7 @@ const Settings: React.FC = () => {
     NotificationPermission | 'unsupported' | 'unknown'
   >('unknown');
 
-  const [privacySettings, setPrivacySettings] = useState<PrivacySettings>({
-    saveVideoLocally: false,
-    blurBackgroundInVideo: true,
-    dataRetentionDays: 30,
-  });
+  const [dataRetentionDays, setDataRetentionDays] = useState(30);
 
   useEffect(() => {
     void getWellnessNotificationPermission()
@@ -51,30 +46,36 @@ const Settings: React.FC = () => {
         console.error('Unable to read desktop notification permission:', error);
       });
 
-    void Promise.all([
-      privacySettingsRepository.get('saveVideoLocally').catch(() => null),
-      privacySettingsRepository.get('blurBackgroundInVideo').catch(() => null),
-      privacySettingsRepository.get('dataRetentionDays').catch(() => null),
-    ]).then(([saveVideo, blurBg, retention]) => {
-      setPrivacySettings({
-        saveVideoLocally: saveVideo ?? false,
-        blurBackgroundInVideo: blurBg ?? true,
-        dataRetentionDays: retention ?? 30,
+    void privacySettingsRepository.get('dataRetentionDays')
+      .then((retention) => {
+        if (retention === null) return;
+        if (!Number.isInteger(retention) || retention < 0 || retention > 3_650) {
+          throw new Error('Stored session retention must be a whole number between 0 and 3650 days.');
+        }
+        setDataRetentionDays(retention);
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to load privacy settings from the local database:', error);
+        setMessage('Unable to load session-retention settings from local storage.');
       });
-    }).catch((err) => {
-      console.warn('Unable to load privacy settings from database:', err);
-    });
   }, []);
 
-  const updatePrivacySetting = <K extends keyof PrivacySettings>(key: K, value: PrivacySettings[K]) => {
-    const next = { ...privacySettings, [key]: value };
-    setPrivacySettings(next);
-    void privacySettingsRepository.set(key, value).then(() => {
-      setMessage('Privacy settings saved on this device.');
-    }).catch((err) => {
-      console.warn('Unable to save privacy setting:', err);
-      setMessage('Privacy setting updated.');
-    });
+  const updateDataRetention = async (days: number) => {
+    try {
+      await privacySettingsRepository.set('dataRetentionDays', days);
+      setDataRetentionDays(days);
+      const deletedCount = await sessionRepository.deleteExpired(days);
+      setMessage(
+        `Session retention saved. Removed ${deletedCount} expired session${deletedCount === 1 ? '' : 's'}.`,
+      );
+    } catch (error) {
+      console.error('Unable to apply the session retention setting:', error);
+      setMessage(
+        error instanceof Error
+          ? `Unable to apply session retention: ${error.message}`
+          : 'Unable to apply session retention.',
+      );
+    }
   };
 
   const saveSettings = (nextSettings: WellnessSettings) => {
@@ -264,51 +265,28 @@ const Settings: React.FC = () => {
           <Database size={20} aria-hidden="true" />
           <div>
             <h2>Data storage controls</h2>
-            <p>Local storage policies and session-video preferences.</p>
+            <p>Choose how long derived session history stays on this device.</p>
           </div>
         </div>
-        <label className="settings-toggle">
-          <div>
-            <span>Blur background during video preview</span>
-            <small style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '2px' }}>
-              Keeps background private during live camera preview.
-            </small>
-          </div>
-          <input
-            type="checkbox"
-            checked={privacySettings.blurBackgroundInVideo}
-            onChange={(event) => updatePrivacySetting('blurBackgroundInVideo', event.target.checked)}
-          />
-        </label>
-        <label className="settings-toggle">
-          <div>
-            <span>Save session video locally</span>
-            <small style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '2px' }}>
-              Zero raw recordings are saved by default.
-            </small>
-          </div>
-          <input
-            type="checkbox"
-            checked={privacySettings.saveVideoLocally}
-            onChange={(event) => updatePrivacySetting('saveVideoLocally', event.target.checked)}
-          />
-        </label>
         <label className="settings-field">
           <div>
             <span>Session history retention</span>
             <small style={{ display: 'block', color: 'var(--text-secondary)', fontSize: '0.8rem', marginTop: '2px' }}>
-              How long completed focus sessions are preserved locally.
+              Expired sessions and their activity events are removed on startup and when you shorten this period.
             </small>
           </div>
           <select
-            value={privacySettings.dataRetentionDays}
-            onChange={(event) => updatePrivacySetting('dataRetentionDays', Number(event.target.value))}
+            value={dataRetentionDays}
+            onChange={(event) => void updateDataRetention(Number(event.target.value))}
           >
             {[7, 14, 30, 90, 180, 365].map((days) => (
               <option key={days} value={days}>{days} days</option>
             ))}
           </select>
         </label>
+        <p className="settings-privacy-note">
+          FocusLens does not record or store webcam video. Session history contains derived activity signals and metrics.
+        </p>
       </section>
 
       {message && (

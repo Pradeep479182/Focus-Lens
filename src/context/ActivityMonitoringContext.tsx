@@ -16,6 +16,8 @@ import { focusTimerService } from '../services/focusTimer.service';
 import {
   activityEventRepository,
   dbService,
+  privacySettingsRepository,
+  sessionRepository,
 } from '../services/db.service';
 import { SessionPersistenceService } from '../services/sessionPersistence.service';
 import { sessionService } from '../services/session.service';
@@ -58,6 +60,14 @@ export function ActivityMonitoringProvider({ children }: { children: ReactNode }
         persistenceAvailable = true;
       } catch (error) {
         console.error('Unable to initialize local session storage:', error);
+      }
+      if (persistenceAvailable) {
+        try {
+          const retentionDays = await privacySettingsRepository.get('dataRetentionDays') ?? 30;
+          await sessionRepository.deleteExpired(retentionDays);
+        } catch (error) {
+          console.error('Unable to clean up expired local session history:', error);
+        }
       }
       if (!mounted) {
         return;

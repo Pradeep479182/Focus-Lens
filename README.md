@@ -1,48 +1,64 @@
 # FocusLens
 
-FocusLens is a privacy-first desktop productivity assistant built with React, Vite, and Tauri.
+FocusLens is a privacy-first desktop focus and wellness assistant. It combines
+a React/Vite interface, a Tauri desktop shell, local SQLite storage, and a
+Python/OpenCV/MediaPipe pipeline for deriving presence, screen-facing, and
+posture signals.
 
-## Project Structure
+## Project layout
 
 ```text
-src/             React UI, routing, layouts, and pages
-src-tauri/       Tauri configuration and Rust native shell
-Docs/            Product, architecture, requirements, and design source of truth
-public/          Static frontend assets
+src/             React pages, components, services, and application state
+src-tauri/       Tauri native shell, permissions, migrations, and packaging
+cv/              Local Python capture and computer-vision pipeline
+tests/           Frontend/service tests
+cv/tests/        Computer-vision tests
+Docs/            Product, architecture, design, and implementation plans
 ```
 
-Keep frontend concerns in `src/` and native or operating-system concerns in `src-tauri/`.
-Future computer vision, SQLite, notifications, privacy, and native integrations should be
-introduced behind those boundaries rather than mixed into page components.
+## Run and validate
 
-## Development Standards
+```powershell
+npm install
+npm run dev
+npm test
+npm run build
+```
 
-- Use PascalCase for React component files and component names, such as `MainLayout.tsx`.
-- Use camelCase for functions, variables, and React event handlers.
-- Keep route-level screens in `src/pages/` and shared application layout in `src/layouts/`.
-- Prefer small, focused components and existing dependencies before adding new libraries.
-- Keep Tauri commands and native integrations in `src-tauri/`; expose only deliberate frontend APIs.
-- Use the six files in `Docs/` as the source of truth for product and architecture decisions.
+For CV tests, install `cv/requirements.txt` in a Python environment and run:
 
-## Day 01: Desktop Foundation
+```powershell
+python -m pip install -r cv/requirements.txt
+python -m pip install pytest
+Set-Location cv
+python -m pytest tests
+```
 
-The Tauri shell lives in `src-tauri/`. React is the frontend, while Tauri provides the native desktop window and the Rust entry point for future local integrations.
+For the Tauri desktop app, install Rust with rustup and the Microsoft C++ Build
+Tools/Windows SDK. Check those prerequisites with `npx tauri info`, then run:
 
-```text
-npm run dev       # React only
-npm run tauri:dev # React + Tauri desktop window
-npm run build     # Frontend production build
+```powershell
+python cv/models/download_model.py
+python cv/models/download_pose_model.py
+npm run tauri:dev
 npm run tauri:build
 ```
 
-The development window is configured as follows:
+The MediaPipe task models are downloaded locally and are not committed. Tauri
+bundles the models that are present when packaging; both models are required to
+start CV. The desktop runtime also requires a compatible system Python and the
+packages in `cv/requirements.txt`. See [the Tauri setup and packaging notes](./src-tauri/README.md).
 
-- Product name: `FocusLens`
-- Window title: `FocusLens`
-- Default size: `1280 x 800`
-- Development URL: `http://127.0.0.1:1420`
+## Desktop privacy and camera flow
 
-To run the desktop commands, install Rust through [rustup](https://rustup.rs/) and the Microsoft C++ Build Tools with the Windows SDK. `npx tauri info` reports whether those native prerequisites are available.
+The React webview is the only webcam owner. While CV is running, it sends
+downsized JPEG frames to the local Python process through a Tauri subprocess
+pipe. Python processes each frame in memory and emits only derived activity
+signals to the app. Frames are not persisted or sent to a network service.
+Session history and preferences are stored locally in SQLite or device storage.
 
-The current Tauri shell does not include computer vision, SQLite, analytics, AI, or cloud
-integration. Those features remain future work until their planned implementation phase.
+## Product and architecture references
+
+See the six project foundation documents under [`Docs/`](./Docs/) for the PRD,
+technical requirements, app flow, UI/UX brief, database schema, and
+implementation plan.

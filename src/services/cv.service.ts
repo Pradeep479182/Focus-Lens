@@ -7,7 +7,7 @@
  *
  * Privacy Guarantees:
  * - Operates entirely on-device (local webcam -> local OpenCV/MediaPipe -> local Tauri -> UI).
- * - Raw frames never leave the Python CV process.
+ * - Downsized frames are forwarded only through local Tauri IPC and are never persisted or networked.
  * - Only high-level, derived detection metadata (presence, screen-facing, posture)
  *   is received and processed.
  */
@@ -19,6 +19,7 @@ import type {
   CameraStatus,
   CvPipelineStatus,
   CvResponse,
+  LiveCameraFrame,
   ServiceEvent,
   Unsubscribe,
 } from './contracts.ts';
@@ -42,6 +43,9 @@ export class CvService {
   private readonly listeners = new Set<(state: CvServiceState) => void>();
   private unsubscribeSignals: Unsubscribe | null = null;
   private unsubscribeStatus: Unsubscribe | null = null;
+  private lastFrameSubmittedAt = 0;
+  private frameSubmissionPending = false;
+  private frameSubmissionFailed = false;
 
   /**
    * Check whether the native desktop CV environment is available.
@@ -95,6 +99,7 @@ export class CvService {
 
       const result = await focusLensService.cv.start();
       this.running = result.running;
+      this.frameSubmissionFailed = false;
       this.lastStatusMessage = result.message;
       this.error = null;
       this.notifyListeners();
@@ -122,6 +127,8 @@ export class CvService {
     try {
       const result = await focusLensService.cv.stop();
       this.running = false;
+      this.lastFrameSubmittedAt = 0;
+      this.frameSubmissionFailed = false;
       this.lastStatusMessage = result.message;
       this.notifyListeners();
       return result;
@@ -130,6 +137,63 @@ export class CvService {
       this.error = message;
       this.notifyListeners();
       throw err;
+    }
+  }
+
+  /**
+   * Forward a throttled, downsized JPEG frame to the local Python CV process.
+   * The original MediaStream and uncompressed frame remain in the webview.
+   */
+  public async submitFrame(frame: LiveCameraFrame): Promise<void> {
+    if (
+      !this.running
+      || !this.isAvailable()
+      || this.frameSubmissionPending
+      || this.frameSubmissionFailed
+    ) {
+      return;
+    }
+    if (frame.capturedAt - this.lastFrameSubmittedAt < 200) {
+      return;
+    }
+
+    this.frameSubmissionPending = true;
+    this.lastFrameSubmittedAt = frame.capturedAt;
+    try {
+      const scale = Math.min(1, 640 / frame.width, 480 / frame.height);
+      const width = Math.max(1, Math.round(frame.width * scale));
+      const height = Math.max(1, Math.round(frame.height * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        throw new Error('Unable to prepare a local camera frame for CV processing.');
+      }
+      context.drawImage(frame.data, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.65);
+      const separator = dataUrl.indexOf(',');
+      if (separator < 0) {
+        throw new Error('Unable to encode the local camera frame as JPEG.');
+      }
+      const jpegBase64 = dataUrl.slice(separator + 1);
+      if (jpegBase64.length > 512 * 1024) {
+        throw new Error('The encoded camera frame exceeds the desktop processing limit.');
+      }
+
+      await focusLensService.cv.processFrame({
+        frameIndex: frame.frameIndex,
+        width,
+        height,
+        jpegBase64,
+      });
+    } catch (error) {
+      this.frameSubmissionFailed = true;
+      this.error = error instanceof Error ? error.message : String(error);
+      this.notifyListeners();
+      throw error;
+    } finally {
+      this.frameSubmissionPending = false;
     }
   }
 
@@ -179,6 +243,9 @@ export class CvService {
     this.running = false;
     this.lastSignal = null;
     this.error = null;
+    this.lastFrameSubmittedAt = 0;
+    this.frameSubmissionPending = false;
+    this.frameSubmissionFailed = false;
   }
 
   private async ensureEventListeners(): Promise<void> {

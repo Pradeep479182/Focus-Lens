@@ -219,8 +219,8 @@ export const PrivacyControlsSection: React.FC<PrivacyControlsSectionProps> = () 
           <li>
             <strong>Camera frames</strong> — processed entirely on this device by
             a local computer-vision pipeline (OpenCV / MediaPipe via a headless
-            Python process). Raw frames are not saved, transmitted, or accessible
-            outside the CV process.
+            Python process). The webview sends downsized frames to Python over
+            a local subprocess pipe; raw frames are not saved or sent over a network.
           </li>
           <li>
             <strong>Derived activity signals</strong> — high-level detections

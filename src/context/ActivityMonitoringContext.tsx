@@ -107,7 +107,11 @@ export function ActivityMonitoringProvider({ children }: { children: ReactNode }
               console.warn('[ActivityMonitoring] CV pipeline failed to start:', err);
             });
           }
-        } else if (timerState.status === 'idle' || timerState.status === 'completed') {
+        } else if (
+          timerState.status === 'paused'
+          || timerState.status === 'idle'
+          || timerState.status === 'completed'
+        ) {
           if (cvService.isRunning()) {
             void cvService.stop().catch((err) => {
               console.warn('[ActivityMonitoring] CV pipeline failed to stop:', err);

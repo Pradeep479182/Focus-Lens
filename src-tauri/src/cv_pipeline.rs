@@ -5,7 +5,8 @@
 //
 // Communication protocol
 // ----------------------
-// The Python process writes newline-delimited JSON to stdout.
+// The Python process receives newline-delimited, local JPEG frames on stdin
+// and writes newline-delimited JSON to stdout.
 // Each line is one of:
 //
 //   ActivitySignal:
@@ -22,16 +23,17 @@
 //
 // Privacy guarantee
 // -----------------
-// Raw webcam frames are never present in the JSON output (enforced in
-// cv/app/pipeline.py::_emit_signal). Only typed detection metadata is
-// forwarded to the frontend.
+// Frames are passed only over the local subprocess pipe and are never
+// persisted or sent over a network. Only typed detection metadata is emitted
+// back to the frontend.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::io::{BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 // ---------------------------------------------------------------------------
@@ -96,12 +98,14 @@ pub struct CvErrorPayload {
 
 struct PipelineState {
     child: Child,
+    stdin: BufWriter<ChildStdin>,
     reader_thread: Option<JoinHandle<()>>,
 }
 
 pub struct CvPipelineBridge {
     state: Arc<Mutex<Option<PipelineState>>>,
     running: Arc<Mutex<bool>>,
+    last_frame_received: Mutex<Option<Instant>>,
 }
 
 impl CvPipelineBridge {
@@ -109,19 +113,24 @@ impl CvPipelineBridge {
         CvPipelineBridge {
             state: Arc::new(Mutex::new(None)),
             running: Arc::new(Mutex::new(false)),
+            last_frame_received: Mutex::new(None),
         }
     }
 
     /// Start the Python CV pipeline subprocess.
     ///
     /// Locates `cv/main.py` relative to the Tauri app resource directory,
-    /// launches `python cv/main.py --headless`, and spawns a background
-    /// reader thread that forwards stdout JSON lines as Tauri events.
+    /// launches `python cv/main.py --headless --stdin-frames`, and spawns a
+    /// background reader thread that forwards stdout JSON lines as Tauri events.
     pub fn start(&self, app: AppHandle, cv_dir: std::path::PathBuf) -> Result<(), String> {
         if self.is_running()? {
             return Ok(());
         }
         self.stop()?;
+        *self
+            .last_frame_received
+            .lock()
+            .map_err(|error| error.to_string())? = None;
 
         let mut running = self.running.lock().map_err(|e| e.to_string())?;
         if *running {
@@ -156,7 +165,9 @@ impl CvPipelineBridge {
         let mut child = Command::new(python)
             .arg(&main_py)
             .arg("--headless")
+            .arg("--stdin-frames")
             .current_dir(&cv_dir)
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit()) // CV log → Tauri's stderr for debugging
             .spawn()
@@ -174,6 +185,14 @@ impl CvPipelineBridge {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Err("CV subprocess did not provide a stdout handle.".to_string());
+            }
+        };
+        let stdin = match child.stdin.take() {
+            Some(stdin) => BufWriter::new(stdin),
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err("CV subprocess did not provide a stdin handle.".to_string());
             }
         };
 
@@ -294,9 +313,52 @@ impl CvPipelineBridge {
         *running = true;
         *state_guard = Some(PipelineState {
             child,
+            stdin,
             reader_thread: Some(reader),
         });
 
+        Ok(())
+    }
+
+    /// Forward one compressed camera frame to the local Python processor.
+    pub fn submit_frame(
+        &self,
+        frame_index: u64,
+        width: u32,
+        height: u32,
+        jpeg_base64: &str,
+    ) -> Result<(), String> {
+        if width == 0 || width > 1280 || height == 0 || height > 720 {
+            return Err("Camera frame dimensions must be between 1x1 and 1280x720.".to_string());
+        }
+        if jpeg_base64.is_empty()
+            || jpeg_base64.len() > 512 * 1024
+            || jpeg_base64.len() % 4 != 0
+            || !jpeg_base64.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'=')
+            })
+        {
+            return Err("Camera frame must contain valid, bounded base64 JPEG data.".to_string());
+        }
+
+        let running = self.running.lock().map_err(|error| error.to_string())?;
+        if !*running {
+            return Err("The CV pipeline is not running.".to_string());
+        }
+        let mut state = self.state.lock().map_err(|error| error.to_string())?;
+        let pipeline = state
+            .as_mut()
+            .ok_or_else(|| "The CV pipeline process is not available.".to_string())?;
+        writeln!(
+            pipeline.stdin,
+            "{{\"frame_index\":{frame_index},\"width\":{width},\"height\":{height},\"jpeg_base64\":\"{jpeg_base64}\"}}"
+        )
+        .and_then(|()| pipeline.stdin.flush())
+        .map_err(|error| format!("Unable to forward a camera frame to the CV process: {error}"))?;
+        *self
+            .last_frame_received
+            .lock()
+            .map_err(|error| error.to_string())? = Some(Instant::now());
         Ok(())
     }
 
@@ -325,6 +387,10 @@ impl CvPipelineBridge {
                     .map_err(|_| "The CV subprocess reader thread panicked.".to_string())?;
             }
         }
+        *self
+            .last_frame_received
+            .lock()
+            .map_err(|error| error.to_string())? = None;
 
         Ok(())
     }
@@ -333,6 +399,21 @@ impl CvPipelineBridge {
         self.running
             .lock()
             .map(|running| *running)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn camera_is_active(&self) -> Result<bool, String> {
+        if !self.is_running()? {
+            return Ok(false);
+        }
+        self.last_frame_received
+            .lock()
+            .map(|last_frame| {
+                last_frame
+                    .as_ref()
+                    .map(|received| received.elapsed() <= Duration::from_secs(2))
+                    .unwrap_or(false)
+            })
             .map_err(|error| error.to_string())
     }
 }

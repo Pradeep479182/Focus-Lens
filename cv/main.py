@@ -82,12 +82,20 @@ def main() -> None:
             "Emits ActivitySignal JSON lines to stdout for Tauri integration."
         ),
     )
+    parser.add_argument(
+        "--stdin-frames",
+        action="store_true",
+        help="Process JPEG frames supplied by the Tauri host instead of opening the webcam.",
+    )
     args = parser.parse_args()
 
     # headless=True forces headless regardless of the SHOW_DEV_PREVIEW setting.
     # headless=False means the config file decides (default dev behaviour).
-    pipeline = CVPipeline(headless=args.headless if args.headless else None)
-    pipeline.run()
+    pipeline = CVPipeline(headless=True if args.stdin_frames else (args.headless or None))
+    if args.stdin_frames:
+        pipeline.run_from_stdin()
+    else:
+        pipeline.run()
 
 
 if __name__ == "__main__":

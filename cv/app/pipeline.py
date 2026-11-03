@@ -10,11 +10,10 @@ knows how all services connect together.
 
 Tauri Integration (Day 24)
 ---------------------------
-In headless / integrated mode the pipeline writes newline-delimited JSON
-to stdout.  Each line is a single ``ActivitySignal`` dict that the
-Tauri Rust layer reads and re-emits as a Tauri event named
-``activity-signal``.  Only detection metadata is written — raw webcam
-frames are never serialised, stored, or transmitted.
+In integrated mode the pipeline receives downsized JPEG frames over the
+local Tauri subprocess stdin and writes newline-delimited JSON activity
+signals to stdout. Only derived detection metadata leaves the CV process;
+frames are not stored or sent over a network.
 
 Headless mode is enabled by setting ``SHOW_DEV_PREVIEW = False`` in
 cv/config/settings.py, or by instantiating ``CVPipeline(headless=True)``.
@@ -28,14 +27,19 @@ without displaying anything — useful for background/integrated use.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import sys
 import time
 import datetime
 
+import cv2
+import numpy as np
+
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from config import SHOW_DEV_PREVIEW, TARGET_FPS
-from services.camera_service import CameraService, CameraError
+from services.camera_service import CameraFrame, CameraService, CameraError
 from services.frame_processor import FrameProcessor
 from utils.logger import get_logger
 
@@ -182,6 +186,57 @@ class CVPipeline:
         finally:
             self._teardown()
 
+    def run_from_stdin(self) -> None:
+        """Process newline-delimited JPEG frames supplied by the Tauri host."""
+        self._running = True
+        log.info("CV pipeline started in host-camera mode.")
+        try:
+            for line in sys.stdin:
+                if not self._running:
+                    break
+                try:
+                    message = json.loads(line)
+                    frame_index = message["frame_index"]
+                    width = message["width"]
+                    height = message["height"]
+                    encoded = message["jpeg_base64"]
+                    if (
+                        isinstance(frame_index, bool)
+                        or not isinstance(frame_index, int)
+                        or frame_index < 0
+                        or isinstance(width, bool)
+                        or not isinstance(width, int)
+                        or isinstance(height, bool)
+                        or not isinstance(height, int)
+                        or not 1 <= width <= 1280
+                        or not 1 <= height <= 720
+                        or not isinstance(encoded, str)
+                        or not encoded
+                        or len(encoded) > 512 * 1024
+                    ):
+                        raise ValueError("Invalid frame metadata or payload size.")
+                    image_bytes = base64.b64decode(encoded, validate=True)
+                    image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+                    if image is None or image.shape[1] != width or image.shape[0] != height:
+                        raise ValueError("JPEG payload dimensions do not match frame metadata.")
+                except (KeyError, TypeError, ValueError, binascii.Error, json.JSONDecodeError) as exc:
+                    log.warning("Ignoring invalid host camera frame: %s", exc)
+                    continue
+
+                self._process_frame(
+                    CameraFrame(
+                        data=image,
+                        frame_index=frame_index,
+                        width=width,
+                        height=height,
+                    )
+                )
+        except (OSError, UnicodeError) as exc:
+            log.error("Unable to read host camera frames: %s", exc)
+            _emit_cv_status("failed", str(exc))
+        finally:
+            self._teardown()
+
     def stop(self) -> None:
         """
         Request the pipeline to stop after the current frame.
@@ -264,15 +319,7 @@ class CVPipeline:
                 log.error("Frame read failed: %s", exc)
                 break
 
-            # --- Process ---
-            frame_result = self._processor.process(camera_frame)
-
-            # --- Aggregation ---
-            # Forward the frame result to the state aggregator.
-            # In headless / Tauri-integrated mode: emit JSON to stdout.
-            signal = self._aggregator.update(frame_result)
-            if signal and self._headless:
-                _emit_signal(signal)
+            frame_result = self._process_frame(camera_frame)
 
             # --- Preview ---
             if self._preview is not None:
@@ -286,3 +333,10 @@ class CVPipeline:
             sleep_for = _MIN_FRAME_INTERVAL - elapsed
             if sleep_for > 0:
                 time.sleep(sleep_for)
+
+    def _process_frame(self, camera_frame: CameraFrame) -> Any:
+        frame_result = self._processor.process(camera_frame)
+        signal = self._aggregator.update(frame_result)
+        if signal and self._headless:
+            _emit_signal(signal)
+        return frame_result

@@ -2,6 +2,8 @@ import { isTauri } from '@tauri-apps/api/core';
 import { appConfig } from '../config/appConfig.ts';
 import type {
   ActivitySignal,
+  CameraFramePayload,
+  CameraFrameStatus,
   CameraStatus,
   CvPipelineStatus,
   CvResponse,
@@ -80,6 +82,15 @@ export const focusLensService = {
       return sendNativeRequest<Record<string, never>, CvPipelineStatus>(
         appConfig.nativeCommands.stopCvPipeline,
         {},
+      );
+    },
+    async processFrame(payload: CameraFramePayload): Promise<CameraFrameStatus> {
+      if (!isTauri()) {
+        throw new Error('Camera frames can only be processed by the Tauri desktop runtime.');
+      }
+      return sendNativeRequest<CameraFramePayload, CameraFrameStatus>(
+        appConfig.nativeCommands.processCameraFrame,
+        payload,
       );
     },
   },

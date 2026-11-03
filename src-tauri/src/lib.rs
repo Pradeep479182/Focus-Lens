@@ -116,9 +116,9 @@ fn get_camera_status(
         };
     }
 
-    let is_running = match bridge.lock() {
-        Ok(bridge) => match bridge.is_running() {
-            Ok(is_running) => is_running,
+    let is_active = match bridge.lock() {
+        Ok(bridge) => match bridge.camera_is_active() {
+            Ok(is_active) => is_active,
             Err(error) => {
                 return ServiceResponse {
                     protocol_version: SERVICE_PROTOCOL_VERSION,
@@ -140,17 +140,17 @@ fn get_camera_status(
         }
     };
 
-    let status = if is_running {
+    let status = if is_active {
         CameraStatus {
             state: "active".to_string(),
             reason: None,
-            message: Some("CV pipeline is running.".to_string()),
+            message: Some("Live camera frames are reaching the local CV pipeline.".to_string()),
         }
     } else {
         CameraStatus {
             state: "inactive".to_string(),
-            reason: Some("cv_pipeline_stopped".to_string()),
-            message: Some("CV pipeline is not running.".to_string()),
+            reason: Some("no_recent_camera_frames".to_string()),
+            message: Some("No recent camera frames are reaching the local CV pipeline.".to_string()),
         }
     };
 
@@ -172,6 +172,64 @@ fn get_camera_status(
 struct CvPipelineStatus {
     running: bool,
     message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CameraFramePayload {
+    frame_index: u64,
+    width: u32,
+    height: u32,
+    jpeg_base64: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CameraFrameStatus {
+    accepted: bool,
+}
+
+#[tauri::command]
+fn process_camera_frame(
+    request: ServiceRequest<CameraFramePayload>,
+    bridge: State<'_, Mutex<CvPipelineBridge>>,
+) -> ServiceResponse<CameraFrameStatus> {
+    if let Some(err_response) = validate_request(&request) {
+        return ServiceResponse {
+            protocol_version: SERVICE_PROTOCOL_VERSION,
+            request_id: err_response.request_id,
+            ok: false,
+            data: None,
+            error: err_response.error,
+        };
+    }
+
+    let result = match bridge.lock() {
+        Ok(bridge) => bridge.submit_frame(
+            request.payload.frame_index,
+            request.payload.width,
+            request.payload.height,
+            &request.payload.jpeg_base64,
+        ),
+        Err(error) => Err(format!("CV pipeline state is unavailable: {error}")),
+    };
+
+    match result {
+        Ok(()) => ServiceResponse {
+            protocol_version: SERVICE_PROTOCOL_VERSION,
+            request_id: request.request_id,
+            ok: true,
+            data: Some(CameraFrameStatus { accepted: true }),
+            error: None,
+        },
+        Err(message) => ServiceResponse {
+            protocol_version: SERVICE_PROTOCOL_VERSION,
+            request_id: request.request_id,
+            ok: false,
+            data: None,
+            error: Some(ServiceError::dynamic_message("DEVICE_UNAVAILABLE", message)),
+        },
+    }
 }
 
 #[tauri::command]
@@ -396,6 +454,7 @@ pub fn run() {
             get_camera_status,
             start_cv_pipeline,
             stop_cv_pipeline,
+            process_camera_frame,
         ])
         .build(tauri::generate_context!())
         .expect("error while building FocusLens");
@@ -429,6 +488,7 @@ mod tests {
         let bridge = make_bridge();
         let guard = bridge.lock().unwrap();
         assert!(!guard.is_running().unwrap());
+        assert!(!guard.camera_is_active().unwrap());
     }
 
     #[test]
@@ -437,6 +497,18 @@ mod tests {
         let guard = bridge.lock().unwrap();
         assert!(guard.stop().is_ok());
         assert!(!guard.is_running().unwrap());
+    }
+
+    #[test]
+    fn frame_submission_rejects_invalid_payloads_and_stopped_pipeline() {
+        let bridge = CvPipelineBridge::new();
+
+        assert!(bridge.submit_frame(0, 0, 240, "AAAA").is_err());
+        assert!(bridge.submit_frame(0, 320, 240, "not-base64").is_err());
+        assert!(bridge
+            .submit_frame(0, 320, 240, "AAAA")
+            .unwrap_err()
+            .contains("not running"));
     }
 
     #[test]

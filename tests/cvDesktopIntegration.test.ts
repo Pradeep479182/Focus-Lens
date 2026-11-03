@@ -41,7 +41,7 @@ class MockTauriBridge {
 
     if (command === appConfig.nativeCommands.startCvPipeline) {
       this.running = true;
-      this.cameraState = 'active';
+      this.cameraState = 'inactive';
       return {
         protocolVersion: appConfig.serviceProtocolVersion,
         requestId: request.requestId,
@@ -58,6 +58,24 @@ class MockTauriBridge {
         requestId: request.requestId,
         ok: true,
         data: { running: false, message: 'CV pipeline stopped.' } satisfies CvPipelineStatus,
+      };
+    }
+
+    if (command === appConfig.nativeCommands.processCameraFrame) {
+      if (!this.running) {
+        return {
+          protocolVersion: appConfig.serviceProtocolVersion,
+          requestId: request.requestId,
+          ok: false,
+          error: { code: 'DEVICE_UNAVAILABLE', message: 'CV pipeline is not running.' },
+        };
+      }
+      this.cameraState = 'active';
+      return {
+        protocolVersion: appConfig.serviceProtocolVersion,
+        requestId: request.requestId,
+        ok: true,
+        data: { accepted: true },
       };
     }
 
@@ -109,6 +127,7 @@ describe('Day 24 — CV / Desktop Integration', () => {
     assert.equal(appConfig.nativeCommands.startCvPipeline, 'start_cv_pipeline');
     assert.equal(appConfig.nativeCommands.stopCvPipeline, 'stop_cv_pipeline');
     assert.equal(appConfig.nativeCommands.getCameraStatus, 'get_camera_status');
+    assert.equal(appConfig.nativeCommands.processCameraFrame, 'process_camera_frame');
     assert.equal(appConfig.nativeEvents.activitySignal, 'activity-signal');
     assert.equal(appConfig.nativeEvents.cvResponse, 'cv-response');
   });
@@ -144,11 +163,25 @@ describe('Day 24 — CV / Desktop Integration', () => {
     assert.equal((startRes.data as CvPipelineStatus).running, true);
     assert.equal(bridge.running, true);
 
-    // Check camera status after starting
-    const statusActive = bridge.handleCommand(appConfig.nativeCommands.getCameraStatus, {
+    // The CV process may be running before the user enables the webcam.
+    const statusWaiting = bridge.handleCommand(appConfig.nativeCommands.getCameraStatus, {
       request: { protocolVersion: 1, requestId: 'r3', payload: {} },
     });
-    assert.equal(statusActive.ok, true);
+    assert.equal(statusWaiting.ok, true);
+    assert.equal((statusWaiting.data as CameraStatus).state, 'inactive');
+
+    const frameRes = bridge.handleCommand(appConfig.nativeCommands.processCameraFrame, {
+      request: {
+        protocolVersion: 1,
+        requestId: 'r-frame',
+        payload: { frameIndex: 1, width: 320, height: 240, jpegBase64: 'AAAA' },
+      },
+    });
+    assert.equal(frameRes.ok, true);
+
+    const statusActive = bridge.handleCommand(appConfig.nativeCommands.getCameraStatus, {
+      request: { protocolVersion: 1, requestId: 'r4', payload: {} },
+    });
     assert.equal((statusActive.data as CameraStatus).state, 'active');
 
     // Stop pipeline

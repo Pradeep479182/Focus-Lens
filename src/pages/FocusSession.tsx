@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Camera, CameraOff, ShieldCheck } from 'lucide-react';
 import type { CameraStatus } from '../services/contracts';
 import { cameraCaptureService } from '../services/cameraCapture.service';
+import { cvService } from '../services/cv.service';
 import { FocusTimer } from '../components/FocusTimer';
 import { useActivityMonitoring } from '../context/useActivityMonitoring';
 
@@ -21,6 +22,9 @@ const FocusSession: React.FC = () => {
     const unsubscribeStatus = cameraCaptureService.subscribeStatus(setCameraStatus);
     const unsubscribeFrames = cameraCaptureService.subscribeFrames((frame) => {
       frameCountRef.current = frame.frameIndex + 1;
+      void cvService.submitFrame(frame).catch((error: unknown) => {
+        console.error('Unable to forward a local camera frame to CV processing:', error);
+      });
     });
     const frameCountTimer = window.setInterval(() => {
       setFrameCount(frameCountRef.current);

@@ -856,6 +856,12 @@ React
 
 The exact communication mechanism should follow the final implementation chosen during development.
 
+The desktop implementation uses the webview as the sole webcam owner. It
+forwards downsized JPEG frames (up to 640x480, at most five frames per
+second) over the local Tauri subprocess stdin to Python; Python returns only
+derived activity signals over Tauri events. Frames are processed in memory,
+not stored or sent over a network.
+
 ---
 
 ## Day 25 — Desktop Resource Handling
@@ -865,6 +871,8 @@ The exact communication mechanism should follow the final implementation chosen 
 Verify:
 
 * Camera lifecycle
+* One webcam owner; the same webview frames reach the CV processor
+* Frame forwarding stops when a focus session pauses or ends
 * CV process lifecycle
 * Application close behavior
 * Session lifecycle

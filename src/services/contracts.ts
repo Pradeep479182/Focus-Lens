@@ -62,6 +62,17 @@ export interface CvPipelineStatus {
   message: string;
 }
 
+export interface CameraFramePayload {
+  frameIndex: number;
+  width: number;
+  height: number;
+  jpegBase64: string;
+}
+
+export interface CameraFrameStatus {
+  accepted: boolean;
+}
+
 export interface LiveCameraFrame {
   data: HTMLVideoElement;
   frameIndex: number;

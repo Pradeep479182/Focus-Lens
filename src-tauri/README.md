@@ -7,6 +7,9 @@ The React frontend is loaded by Tauri through the Vite development server at `ht
 - `tauri.conf.json` defines the FocusLens window, frontend build workflow, and the Python CV source files copied into the production resource directory.
 - The SQLite plugin stores `sqlite:focuslens.db` in the app's local data directory and applies the schema migration on load.
 - The desktop close handler flushes pending session writes, stops the CV pipeline, marks unfinished sessions interrupted, closes the frontend database connection, and only then allows the window to exit.
+- The React webview is the sole webcam owner. While a focus session is running,
+  it forwards downsized JPEG frames to the Python CV process over the local
+  Tauri subprocess pipe; only derived signals are sent back to the UI.
 
 ## Local CV runtime
 

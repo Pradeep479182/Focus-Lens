@@ -18,7 +18,7 @@ from config import LOG_LEVEL
 
 def get_logger(name: str) -> logging.Logger:
     """
-    Return a named logger that writes to stdout.
+    Return a named logger that writes to stderr.
 
     All CV modules call this function with ``__name__`` to get their
     module-specific logger. The log level is controlled centrally
@@ -34,7 +34,7 @@ def get_logger(name: str) -> logging.Logger:
 
     # Only add a handler if none exist yet (avoids duplicate output).
     if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
+        handler = logging.StreamHandler(sys.stderr)
         formatter = logging.Formatter(
             fmt="%(asctime)s  [%(levelname)-8s]  %(name)s — %(message)s",
             datefmt="%H:%M:%S",

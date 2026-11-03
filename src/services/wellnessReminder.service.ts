@@ -394,7 +394,11 @@ function localDateKey(timestamp: number): string {
 }
 
 function createReminderId(): string {
-  return crypto.randomUUID();
+  const cryptoObject = globalThis.crypto;
+  if (cryptoObject && typeof cryptoObject.randomUUID === 'function') {
+    return cryptoObject.randomUUID();
+  }
+  return `reminder-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 function isWellnessSettings(value: unknown): value is WellnessSettings {
@@ -460,10 +464,28 @@ export const WELLNESS_STATE_KEY = STATE_KEY;
 
 let sharedService: WellnessReminderService | null = null;
 
+function getSafeWellnessStorage(): WellnessStorage {
+  const globalScope = globalThis as typeof globalThis & {
+    localStorage?: Storage;
+  };
+  const storage = globalScope.localStorage;
+  if (storage && typeof storage.getItem === 'function' && typeof storage.setItem === 'function') {
+    return storage;
+  }
+
+  const fallback = new Map<string, string>();
+  return {
+    getItem: (key: string) => fallback.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      fallback.set(key, value);
+    },
+  };
+}
+
 export function getWellnessReminderService(): WellnessReminderService {
   if (!sharedService) {
     sharedService = new WellnessReminderService({
-      storage: window.localStorage,
+      storage: getSafeWellnessStorage(),
       timer: focusTimerService,
     });
   }

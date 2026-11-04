@@ -323,6 +323,7 @@ describe('Local SQLite database and repositories', () => {
     const { testDatabase, database, sessions, events } = await setup();
     try {
       await sessions.create(runningSession());
+      await sessions.create(runningSession(SESSION_2));
       const start = Date.parse('2026-10-15T00:01:00.000Z');
       const threshold = start + 60_000;
       const awayEvent: AwayDetectionEvent = {
@@ -340,6 +341,16 @@ describe('Local SQLite database and repositories', () => {
       const stored = await events.listBySession(SESSION_1);
       assert.equal(stored.length, 1);
       assert.deepEqual(stored[0], { ...awayEvent, duration: 95, endedAt: threshold + 35_000 });
+
+      const otherEvent = {
+        ...awayEvent,
+        id: 'away-event-2',
+        sessionId: SESSION_2,
+      };
+      await events.record(otherEvent);
+      const allEvents = await events.listAll();
+      assert.equal(allEvents.length, 2);
+      assert.ok(allEvents.some((event) => event.id === otherEvent.id && event.sessionId === SESSION_2));
     } finally {
       await database.close();
       testDatabase.cleanup();

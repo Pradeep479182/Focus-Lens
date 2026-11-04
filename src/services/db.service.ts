@@ -470,6 +470,16 @@ export class ActivityEventRepository {
     );
     return rows.map(activityEventFromRow);
   }
+
+  async listAll(): Promise<ActivityEvent[]> {
+    const rows = await this.database.select<ActivityEventRow[]>(
+      `SELECT event_id, session_id, event_type, occurred_at, duration_seconds,
+              away_started_at, threshold_reached_at, ended_at
+       FROM activity_events
+       ORDER BY occurred_at ASC`,
+    );
+    return rows.map(activityEventFromRow);
+  }
 }
 
 export class PreferencesRepository {

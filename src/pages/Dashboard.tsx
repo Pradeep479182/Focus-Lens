@@ -2,7 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { Moon, Sun, Sunrise, Sunset, Target } from 'lucide-react';
 import { useNavigate, Link } from 'react-router-dom';
 import DashboardCatMascot from '../components/DashboardCatMascot';
-import { getDashboardMetrics, type DashboardMetrics } from '../services/dashboardMetrics.service';
+import {
+  getDashboardAnalytics,
+  type DashboardMetrics,
+} from '../services/dashboardMetrics.service';
 import { sessionRetrievalService } from '../services/sessionRetrieval.service';
 import type { Session } from '../types';
 
@@ -10,6 +13,16 @@ type DaypartId = 'morning' | 'afternoon' | 'evening' | 'night';
 type DaypartAllocation = Record<DaypartId, number>;
 
 const ALLOCATION_STORAGE_KEY = 'focuslens.daypart-allocation.v1';
+const CLOCK_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+});
+const DATE_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  weekday: 'long',
+  month: 'long',
+  day: 'numeric',
+});
 const DEFAULT_ALLOCATION: DaypartAllocation = {
   morning: 90,
   afternoon: 120,
@@ -67,9 +80,61 @@ function formatSeconds(totalSeconds: number): string {
   return `${minutes}m`;
 }
 
+const LiveClock: React.FC<{
+  displayName: string;
+  onStartFocus: () => void;
+  onDaypartChange: (daypart: DaypartId) => void;
+}> = ({
+  displayName,
+  onStartFocus,
+  onDaypartChange,
+}) => {
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const activeDaypart = getCurrentDaypart(now);
+  useEffect(() => {
+    onDaypartChange(activeDaypart);
+  }, [activeDaypart, onDaypartChange]);
+
+  const greeting = {
+    morning: 'Good morning',
+    afternoon: 'Good afternoon',
+    evening: 'Good evening',
+    night: 'Good night',
+  }[activeDaypart];
+  const clockText = CLOCK_FORMATTER.format(now);
+  const dateText = DATE_FORMATTER.format(now);
+
+  return (
+    <>
+      <div className="greeting-board-wrap">
+        <DashboardCatMascot />
+        <section className="greeting-glass-board" aria-label="Welcome">
+          <h1>{greeting}, {displayName}</h1>
+          <p>Ready for a focused session?</p>
+          <button className="btn" onClick={onStartFocus}>
+            <Target size={18} />
+            Start Focus Session
+          </button>
+        </section>
+      </div>
+      <div className="live-clock" role="timer" aria-label={`Local time ${clockText}`}>
+        <span className="live-clock-label">LOCAL TIME</span>
+        <strong>{clockText}</strong>
+        <span>{dateText}</span>
+      </div>
+    </>
+  );
+};
+
 const Dashboard: React.FC<{ username: string }> = ({ username }) => {
   const navigate = useNavigate();
-  const [now, setNow] = useState(() => new Date());
+  const [activeDaypart, setActiveDaypart] = useState(() => getCurrentDaypart(new Date()));
   const [allocation, setAllocation] = useState<DaypartAllocation>(readAllocation);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [metricsLoading, setMetricsLoading] = useState(true);
@@ -80,34 +145,38 @@ const Dashboard: React.FC<{ username: string }> = ({ username }) => {
   const [sessionsError, setSessionsError] = useState(false);
 
   useEffect(() => {
-    void sessionRetrievalService.getRecentSessionsResult(3).then((res) => {
-      if (res.success) {
-        setRecentSessions(res.data);
-      } else {
-        setSessionsError(true);
-      }
-      setSessionsLoading(false);
-    }).catch(() => {
-      setSessionsError(true);
-      setSessionsLoading(false);
-    });
-  }, []);
-
-  useEffect(() => {
     let active = true;
-    getDashboardMetrics().then((result) => {
-      if (active) setMetrics(result);
-    }).catch(() => {
-      if (active) setMetricsError(true);
-    }).finally(() => {
-      if (active) setMetricsLoading(false);
-    });
-    return () => { active = false; };
-  }, []);
 
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(new Date()), 1_000);
-    return () => window.clearInterval(timer);
+    const loadDashboardData = async () => {
+      try {
+        const analytics = await getDashboardAnalytics();
+        if (!active) return;
+        setMetrics(analytics.metrics);
+        setRecentSessions(analytics.sessions.slice(0, 3));
+      } catch {
+        if (!active) return;
+        setMetricsError(true);
+        try {
+          const result = await sessionRetrievalService.getRecentSessionsResult(3);
+          if (!active) return;
+          if (result.success) {
+            setRecentSessions(result.data);
+          } else {
+            setSessionsError(true);
+          }
+        } catch {
+          if (active) setSessionsError(true);
+        }
+      } finally {
+        if (active) {
+          setMetricsLoading(false);
+          setSessionsLoading(false);
+        }
+      }
+    };
+
+    void loadDashboardData();
+    return () => { active = false; };
   }, []);
 
   useEffect(() => {
@@ -118,47 +187,17 @@ const Dashboard: React.FC<{ username: string }> = ({ username }) => {
     }
   }, [allocation]);
 
-  const activeDaypart = getCurrentDaypart(now);
-  const greeting = {
-    morning: 'Good morning',
-    afternoon: 'Good afternoon',
-    evening: 'Good evening',
-    night: 'Good night',
-  }[activeDaypart];
   const displayName = username.charAt(0).toLocaleUpperCase() + username.slice(1);
   const totalMinutes = Object.values(allocation).reduce((total, minutes) => total + minutes, 0);
-  const clockText = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-  }).format(now);
-  const dateText = new Intl.DateTimeFormat(undefined, {
-    weekday: 'long',
-    month: 'long',
-    day: 'numeric',
-  }).format(now);
   return (
     <div className="dashboard-page">
       <div className="dashboard-content">
       <div className="hero-section dashboard-hero">
-        <div>
-          <div className="greeting-board-wrap">
-            <DashboardCatMascot />
-            <section className="greeting-glass-board" aria-label="Welcome">
-              <h1>{greeting}, {displayName}</h1>
-              <p>Ready for a focused session?</p>
-              <button className="btn" onClick={() => navigate('/session')}>
-                <Target size={18} />
-                Start Focus Session
-              </button>
-            </section>
-          </div>
-        </div>
-        <div className="live-clock" role="timer" aria-label={`Local time ${clockText}`}>
-          <span className="live-clock-label">LOCAL TIME</span>
-          <strong>{clockText}</strong>
-          <span>{dateText}</span>
-        </div>
+        <LiveClock
+          displayName={displayName}
+          onStartFocus={() => navigate('/session')}
+          onDaypartChange={setActiveDaypart}
+        />
       </div>
 
       <div className="grid grid-cols-4">

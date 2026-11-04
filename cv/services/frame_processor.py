@@ -57,6 +57,7 @@ from services.pose_landmarker import (
     PoseLandmarkerService,
 )
 from services.screen_facing_estimator import ScreenFacingEstimator
+from services.mediapipe_image import create_mediapipe_image
 from services.posture_landmark_extractor import PostureLandmarkExtractor
 from services.posture_classifier import PostureClassifier
 from utils.logger import get_logger
@@ -259,8 +260,18 @@ class FrameProcessor:
         # We reuse the original CameraFrame for the landmarker so it can
         # access the full-resolution frame before any resize was applied —
         # more detail = better landmark accuracy.
+        mediapipe_image = None
+        if (
+            self._face_landmarker.is_available is True
+            or self._pose_landmarker.is_available is True
+        ):
+            try:
+                mediapipe_image = create_mediapipe_image(frame)
+            except Exception as e:
+                log.error("Error preparing frame for MediaPipe detection: %s", e)
+
         try:
-            face_result: FaceDetectionResult = self._detect_face(frame)
+            face_result: FaceDetectionResult = self._detect_face(frame, mediapipe_image)
         except Exception as e:
             log.error("Error during face detection: %s", e)
             detector_available = self._face_landmarker.is_available
@@ -275,7 +286,10 @@ class FrameProcessor:
             )
 
         try:
-            pose_result: PoseDetectionResult = self._pose_landmarker.detect(frame)
+            if mediapipe_image is None:
+                pose_result = self._pose_landmarker.detect(frame)
+            else:
+                pose_result = self._pose_landmarker.detect(frame, mediapipe_image)
         except Exception as e:
             log.error("Error during pose detection: %s", e)
             pose_result = PoseDetectionResult(
@@ -325,7 +339,7 @@ class FrameProcessor:
             posture_state,
             posture_reminder,
         )
-        log.info(
+        log.debug(
             "Person Presence: %s | Screen Facing: %s | Posture: %s (raw=%s, shoulders_valid=%s)",
             presence_result.state,
             screen_facing_state,
@@ -435,7 +449,11 @@ class FrameProcessor:
             error_message="; ".join(error_messages) or None,
         )
 
-    def _detect_face(self, frame: Any) -> FaceDetectionResult:
+    def _detect_face(
+        self,
+        frame: Any,
+        mediapipe_image: object | None = None,
+    ) -> FaceDetectionResult:
         """
         Run MediaPipe face landmark detection on the current frame.
 
@@ -444,7 +462,9 @@ class FrameProcessor:
             Always returns a valid object — never raises.
             Check ``result.detected`` before using landmark data.
         """
-        return self._face_landmarker.detect(frame)
+        if mediapipe_image is None:
+            return self._face_landmarker.detect(frame)
+        return self._face_landmarker.detect(frame, mediapipe_image)
 
     def _maybe_resize(self, image: Any) -> Any:
         """

@@ -44,6 +44,7 @@ import time
 from dataclasses import dataclass, field
 from typing import List
 
+from services.mediapipe_image import create_mediapipe_image
 from utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -235,7 +236,11 @@ class FaceLandmarkerService:
             self._available = False
             return False
 
-    def detect(self, camera_frame: object) -> FaceDetectionResult:
+    def detect(
+        self,
+        camera_frame: object,
+        mediapipe_image: object | None = None,
+    ) -> FaceDetectionResult:
         """
         Run face landmark detection on one webcam frame.
 
@@ -263,8 +268,12 @@ class FaceLandmarkerService:
             )
 
         try:
-            mp_image = self._to_mediapipe_image(camera_frame)
-            raw_result = self._landmarker.detect(mp_image)
+            image = (
+                mediapipe_image
+                if mediapipe_image is not None
+                else create_mediapipe_image(camera_frame)
+            )
+            raw_result = self._landmarker.detect(image)
             return self._parse_result(raw_result, timestamp_ms)
 
         except Exception as exc:  # pylint: disable=broad-except
@@ -313,12 +322,7 @@ class FaceLandmarkerService:
         Returns:
             A ``mediapipe.Image`` in ``IMAGE_FORMAT_SRGB`` format.
         """
-        import cv2
-        import mediapipe as mp
-
-        bgr_frame = camera_frame.data  # type: ignore[attr-defined]
-        rgb_frame = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
-        return mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        return create_mediapipe_image(camera_frame)
 
     @staticmethod
     def _parse_result(raw_result: object, timestamp_ms: float) -> FaceDetectionResult:

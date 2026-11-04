@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import type { ActivityEvent, Session } from '../src/types/index.ts';
-import { calculateDashboardMetrics } from '../src/services/dashboardMetrics.service.ts';
+import {
+  calculateDashboardMetrics,
+  getDashboardAnalytics,
+} from '../src/services/dashboardMetrics.service.ts';
+import {
+  activityEventRepository,
+  sessionRepository,
+} from '../src/services/db.service.ts';
 
 const t0 = Date.parse('2026-10-27T08:00:00.000Z');
 
@@ -34,6 +41,42 @@ function away(id: string, startedAt: number, duration: number, sessionId = 's1')
 }
 
 describe('dashboard metrics', () => {
+  it('loads analytics events once and keeps session-specific away totals', async () => {
+    const sessions = [session('s1', 1_000), session('s2', 500)];
+    const events = [
+      away('a1', t0, 60, 's1'),
+      away('a2', t0 + 500_000, 30, 's2'),
+    ];
+    const originalGetAll = sessionRepository.getAll;
+    const originalListAll = activityEventRepository.listAll;
+    const originalListBySession = activityEventRepository.listBySession;
+    let eventQueries = 0;
+    let perSessionQueries = 0;
+
+    sessionRepository.getAll = async () => sessions;
+    activityEventRepository.listAll = async () => {
+      eventQueries += 1;
+      return events;
+    };
+    activityEventRepository.listBySession = async () => {
+      perSessionQueries += 1;
+      return [];
+    };
+
+    try {
+      const analytics = await getDashboardAnalytics();
+      assert.equal(eventQueries, 1);
+      assert.equal(perSessionQueries, 0);
+      assert.equal(analytics.metrics.totalAwayTimeSeconds, 90);
+      assert.equal(analytics.sessions.find((item) => item.id === 's1')?.awayDurationSeconds, 60);
+      assert.equal(analytics.sessions.find((item) => item.id === 's2')?.awayDurationSeconds, 30);
+    } finally {
+      sessionRepository.getAll = originalGetAll;
+      activityEventRepository.listAll = originalListAll;
+      activityEventRepository.listBySession = originalListBySession;
+    }
+  });
+
   it('sums confirmed elapsed time and averages all persisted statuses', () => {
     const metrics = calculateDashboardMetrics([
       session('s1', 1_200, 'completed'),

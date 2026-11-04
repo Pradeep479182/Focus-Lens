@@ -27,8 +27,16 @@ export function calculateDashboardMetrics(
   events: ActivityEvent[],
 ): DashboardMetrics {
   const validSessions = sessions.filter(isUsableSession);
-  const totalFocusTimeSeconds = validSessions.reduce((sum, session) => sum + session.elapsedSeconds, 0);
   const awayEvents = events.filter(isUsableAwayEvent);
+  return buildDashboardMetrics(validSessions, awayEvents);
+}
+
+function buildDashboardMetrics(
+  validSessions: Session[],
+  awayEvents: ActivityEvent[],
+): DashboardMetrics {
+  const totalFocusTimeSeconds = validSessions.reduce((sum, session) => sum + session.elapsedSeconds, 0);
+  const awayEventsBySession = groupAwayEventsBySession(awayEvents);
   const totalAwayTimeSeconds = sumUniqueAwayIntervals(awayEvents);
 
   return {
@@ -42,7 +50,7 @@ export function calculateDashboardMetrics(
     focusIndicators: validSessions.map((session) => calculateFocusIndicator({
       sessionId: session.id,
       activeDurationSeconds: session.elapsedSeconds,
-      awayDurationSeconds: awayDurationForSession(awayEvents, session.id),
+      awayDurationSeconds: sumUniqueAwayIntervals(awayEventsBySession.get(session.id) ?? []),
     })),
   };
 }
@@ -51,19 +59,20 @@ export function calculateDashboardMetrics(
 export async function getDashboardAnalytics(): Promise<DashboardAnalyticsData> {
   const { activityEventRepository, sessionRepository } = await import('./db.service.ts');
   const sessions = await sessionRepository.getAll({ order: 'desc' });
-  const eventGroups = await Promise.all(sessions.map((session) => activityEventRepository.listBySession(session.id)));
-  const events = eventGroups.flat();
-  const metrics = calculateDashboardMetrics(sessions, events);
+  const events = await activityEventRepository.listAll();
+  const validSessions = sessions.filter(isUsableSession);
+  const awayEvents = events.filter(isUsableAwayEvent);
+  const awayEventsBySession = groupAwayEventsBySession(awayEvents);
+  const metrics = buildDashboardMetrics(validSessions, awayEvents);
   const indicatorBySession = new Map(metrics.focusIndicators.map((indicator) => [indicator.sessionId, indicator]));
-  const usableSessions = sessions.filter(isUsableSession);
 
   return {
     metrics,
-    sessions: usableSessions.map((session) => {
+    sessions: validSessions.map((session) => {
       const indicator = indicatorBySession.get(session.id);
       return {
         ...session,
-        awayDurationSeconds: awayDurationForSession(events.filter(isUsableAwayEvent), session.id),
+        awayDurationSeconds: sumUniqueAwayIntervals(awayEventsBySession.get(session.id) ?? []),
         ...(indicator?.status === 'calculated' && typeof indicator.score === 'number' && Number.isFinite(indicator.score)
           ? { focusScore: indicator.score }
           : {}),
@@ -130,6 +139,15 @@ function sumUniqueAwayIntervals(events: ActivityEvent[]): number {
   return totalMs / 1_000;
 }
 
-function awayDurationForSession(events: ActivityEvent[], sessionId: string): number {
-  return sumUniqueAwayIntervals(events.filter((event) => event.sessionId === sessionId));
+function groupAwayEventsBySession(events: ActivityEvent[]): Map<string, ActivityEvent[]> {
+  const grouped = new Map<string, ActivityEvent[]>();
+  for (const event of events) {
+    const sessionEvents = grouped.get(event.sessionId);
+    if (sessionEvents) {
+      sessionEvents.push(event);
+    } else {
+      grouped.set(event.sessionId, [event]);
+    }
+  }
+  return grouped;
 }

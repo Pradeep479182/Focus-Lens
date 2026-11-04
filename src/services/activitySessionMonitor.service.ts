@@ -67,6 +67,29 @@ export class ActivitySessionMonitor {
     return () => this.listeners.delete(listener);
   }
 
+  subscribeSignals(
+    listener: (signal: ActivitySignal, sessionId: string) => void,
+  ): Unsubscribe {
+    let lastSessionId: string | null = null;
+    let lastOccurredAt: string | null = null;
+    return this.subscribe((state) => {
+      if (state.sessionId !== lastSessionId) {
+        lastSessionId = state.sessionId;
+        lastOccurredAt = null;
+      }
+      if (
+        state.status !== 'active'
+        || !state.sessionId
+        || !state.signal
+        || state.signal.occurredAt === lastOccurredAt
+      ) {
+        return;
+      }
+      lastOccurredAt = state.signal.occurredAt;
+      listener(state.signal, state.sessionId);
+    });
+  }
+
   start(): Unsubscribe {
     if (this.unsubscribeTimer || this.disposed) {
       return () => this.stop();
@@ -139,7 +162,7 @@ export class ActivitySessionMonitor {
 
     if (state.status === 'running') {
       if (previousStatus !== 'paused' || !this.state.sessionId) {
-        this.beginSession();
+        this.beginSession(state.sessionId);
       } else {
         this.sessionStartedAt = Date.now();
         this.latestSignalAt = 0;
@@ -167,12 +190,12 @@ export class ActivitySessionMonitor {
     this.updateState(INITIAL_STATE);
   }
 
-  private beginSession(): void {
+  private beginSession(timerSessionId: string | null): void {
     this.sessionStartedAt = Date.now();
     this.latestSignalAt = 0;
     this.seenEventIds.clear();
     this.updateState({
-      sessionId: this.createSessionId(),
+      sessionId: timerSessionId ?? this.createSessionId(),
       status: 'waiting',
       signal: null,
       error: null,

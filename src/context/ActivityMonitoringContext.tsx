@@ -11,6 +11,7 @@ import {
   type AwayDetectionSnapshot,
 } from '../services/awayDetection.service';
 import { cvService } from '../services/cv.service';
+import { activityEventTracker } from '../services/activityEventTracker.service';
 import { focusLensService } from '../services/focusLensService';
 import { focusTimerService } from '../services/focusTimer.service';
 import {
@@ -75,6 +76,15 @@ export function ActivityMonitoringProvider({ children }: { children: ReactNode }
 
       const monitor = new ActivitySessionMonitor(focusLensService, focusTimerService);
       const unsubscribeActivity = monitor.subscribe(setActivityState);
+      const unsubscribeTrackedSignals = monitor.subscribeSignals((signal) => {
+        activityEventTracker.processSignal({
+          personPresence: signal.personPresence,
+          screenFacing: signal.screenFacing,
+          posture: signal.posture,
+          confidence: signal.confidence,
+          occurredAt: signal.occurredAt,
+        });
+      });
       const stopMonitor = monitor.start();
       let unsubscribeAway = () => {};
       let stopAway = () => {};
@@ -140,6 +150,7 @@ export function ActivityMonitoringProvider({ children }: { children: ReactNode }
         previousStop?.();
         stopAway();
         unsubscribeAway();
+        unsubscribeTrackedSignals();
         stopMonitor();
         unsubscribeActivity();
       };

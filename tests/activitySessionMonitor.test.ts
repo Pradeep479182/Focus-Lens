@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import type { FocusTimerState } from '../src/types/index.ts';
 import { ActivitySessionMonitor } from '../src/services/activitySessionMonitor.service.ts';
+import { ActivityEventTrackerService } from '../src/services/activityEventTracker.service.ts';
 import type {
   ActivitySignal,
   CvResponse,
@@ -12,11 +13,13 @@ import type {
 
 class FakeTimer {
   private status: FocusTimerState['status'] = 'idle';
+  private sessionId: string | null = null;
   private readonly listeners = new Set<(state: FocusTimerState) => void>();
 
   getState(): FocusTimerState {
     return {
       status: this.status,
+      sessionId: this.sessionId,
       durationMinutes: 25,
       totalSeconds: 1_500,
       remainingSeconds: 1_500,
@@ -36,8 +39,9 @@ class FakeTimer {
     return () => this.listeners.delete(listener);
   }
 
-  setStatus(status: FocusTimerState['status']): void {
+  setStatus(status: FocusTimerState['status'], sessionId = this.sessionId): void {
     this.status = status;
+    this.sessionId = sessionId;
     this.listeners.forEach((listener) => listener(this.getState()));
   }
 }
@@ -120,6 +124,76 @@ describe('ActivitySessionMonitor', () => {
 
     stop();
     unsubscribeState();
+  });
+
+  it('uses the focus timer session ID for monitor and persisted-session correlation', async () => {
+    const timer = new FakeTimer();
+    const events = new FakeEventSource();
+    const monitor = new ActivitySessionMonitor(events, timer, () => 'fallback-session');
+    let current = initialMonitorState();
+    monitor.subscribe((state) => {
+      current = state;
+    });
+    const stop = monitor.start();
+    await Promise.resolve();
+
+    timer.setStatus('running', 'timer-session');
+
+    assert.equal(current.sessionId, 'timer-session');
+    stop();
+  });
+
+  it('forwards only validated, active-session signals to the activity event tracker', async () => {
+    const timer = new FakeTimer();
+    const events = new FakeEventSource();
+    const monitor = new ActivitySessionMonitor(events, timer, () => 'session-tracked');
+    const tracker = new ActivityEventTrackerService({ minTransitionIntervalMs: 0 });
+    tracker.startSession('session-tracked');
+    const unsubscribeSignals = monitor.subscribeSignals((signal) => {
+      tracker.processSignal({
+        personPresence: signal.personPresence,
+        screenFacing: signal.screenFacing,
+        posture: signal.posture,
+        confidence: signal.confidence,
+        occurredAt: signal.occurredAt,
+      });
+    });
+    const stop = monitor.start();
+    await Promise.resolve();
+    timer.setStatus('running', 'session-tracked');
+
+    const validAt = new Date(Date.now() + 10).toISOString();
+    events.emitActivity(activityEvent(
+      'valid-for-tracker',
+      validAt,
+      {
+        personPresence: 'present',
+        screenFacing: 'facing',
+        posture: 'good',
+      },
+      'session-tracked',
+    ));
+
+    assert.deepEqual(tracker.getCurrentTrackedStates(), {
+      person: 'PRESENT',
+      screenFacing: 'SCREEN_FACING',
+      posture: 'GOOD_POSTURE',
+    });
+    assert.equal(tracker.getEvents().filter((event) => event.category !== 'session').length, 3);
+    assert.ok(tracker.getEvents('session-tracked').some((event) => event.category === 'person'));
+
+    timer.setStatus('paused');
+    events.emitActivity(activityEvent(
+      'paused-for-tracker',
+      new Date(Date.now() + 20).toISOString(),
+      { personPresence: 'away' },
+      'session-tracked',
+    ));
+    assert.equal(tracker.getEvents().filter((event) => event.category === 'person').length, 1);
+
+    unsubscribeSignals();
+    stop();
+    tracker.clearEvents();
   });
 
   it('accepts UNKNOWN as unknown and ignores stale, duplicate, and mismatched events', async () => {

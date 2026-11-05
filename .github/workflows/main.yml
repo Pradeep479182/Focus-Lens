@@ -3,7 +3,8 @@ name: Build FocusLens Windows App
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -43,6 +44,10 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      - name: Update Tauri dependency
+        working-directory: src-tauri
+        run: cargo update -p tauri --precise 2.12.3
+
       - name: Build Windows Desktop App
         run: npm run tauri:build
 
@@ -52,3 +57,4 @@ jobs:
           name: FocusLens-Windows
           path: src-tauri/target/release/bundle/
           if-no-files-found: error
+

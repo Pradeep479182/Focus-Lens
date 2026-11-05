@@ -71,9 +71,7 @@ struct CameraStatus {
 #[serde(deny_unknown_fields)]
 struct EmptyPayload {}
 
-fn validate_request<T>(
-    request: &ServiceRequest<T>,
-) -> Option<ServiceResponse<()>> {
+fn validate_request<T>(request: &ServiceRequest<T>) -> Option<ServiceResponse<()>> {
     if request.protocol_version != SERVICE_PROTOCOL_VERSION {
         return Some(ServiceResponse {
             protocol_version: SERVICE_PROTOCOL_VERSION,
@@ -321,38 +319,29 @@ fn start_cv_pipeline(
 }
 
 #[tauri::command]
-
-fn stop_pipeline_on_exit(app_handle: &tauri::AppHandle) {
-    let Some(bridge) = app_handle.try_state::<Mutex<CvPipelineBridge>>() else {
-        return;
-    };
-
-    match bridge.lock() {
-        Ok(bridge) => {
-            if let Err(error) = bridge.stop() {
-                eprintln!(
-                    "[FocusLens] Failed to stop CV pipeline during shutdown: {error}"
-                );
-            }
-        }
-        Err(error) => {
-            eprintln!(
-                "[FocusLens] CV pipeline state was poisoned during shutdown: {error}"
-            );
-        }
-    };
-}
-
+fn stop_cv_pipeline(
+    request: ServiceRequest<EmptyPayload>,
+    bridge: State<'_, Mutex<CvPipelineBridge>>,
+) -> ServiceResponse<CvPipelineStatus> {
+    if let Some(err_response) = validate_request(&request) {
+        return ServiceResponse {
+            protocol_version: SERVICE_PROTOCOL_VERSION,
+            request_id: err_response.request_id,
+            ok: false,
+            data: None,
+            error: err_response.error,
+        };
+    }
 
     let guard = match bridge.lock() {
-        Ok(g) => g,
-        Err(e) => {
+        Ok(guard) => guard,
+        Err(error) => {
             return ServiceResponse {
                 protocol_version: SERVICE_PROTOCOL_VERSION,
                 request_id: request.request_id,
                 ok: false,
                 data: None,
-                error: Some(ServiceError::dynamic_message("INTERNAL", e.to_string())),
+                error: Some(ServiceError::dynamic_message("INTERNAL", error.to_string())),
             };
         }
     };
@@ -368,12 +357,12 @@ fn stop_pipeline_on_exit(app_handle: &tauri::AppHandle) {
             }),
             error: None,
         },
-        Err(e) => ServiceResponse {
+        Err(error) => ServiceResponse {
             protocol_version: SERVICE_PROTOCOL_VERSION,
             request_id: request.request_id,
             ok: false,
             data: None,
-            error: Some(ServiceError::dynamic_message("INTERNAL", e)),
+            error: Some(ServiceError::dynamic_message("INTERNAL", error)),
         },
     }
 }
@@ -427,13 +416,16 @@ fn stop_pipeline_on_exit(app_handle: &tauri::AppHandle) {
     let Some(bridge) = app_handle.try_state::<Mutex<CvPipelineBridge>>() else {
         return;
     };
+
     match bridge.lock() {
         Ok(bridge) => {
             if let Err(error) = bridge.stop() {
                 eprintln!("[FocusLens] Failed to stop CV pipeline during shutdown: {error}");
             }
         }
-        Err(error) => eprintln!("[FocusLens] CV pipeline state was poisoned during shutdown: {error}"),
+        Err(error) => {
+            eprintln!("[FocusLens] CV pipeline state was poisoned during shutdown: {error}");
+        }
     }
 }
 
@@ -484,8 +476,8 @@ mod tests {
     use super::{find_cv_directory, is_cv_directory, EmptyPayload, ServiceRequest};
     use crate::config::SERVICE_PROTOCOL_VERSION;
     use crate::cv_pipeline::CvPipelineBridge;
-    use std::sync::Mutex;
     use std::fs;
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn make_bridge() -> Mutex<CvPipelineBridge> {
@@ -541,8 +533,7 @@ mod tests {
     }
 
     // Note: get_camera_status requires a Tauri AppHandle via State<>, which
-    // cannot easily be constructed in a unit test.  The existing command-level
-    // tests verify the ServiceResponse shape; the bridge is tested above.
+    // cannot easily be constructed in a unit test. The bridge is tested above.
     //
     // Full integration (Python subprocess + Tauri events) must be verified
     // by running `npm run tauri:dev` with a webcam present.

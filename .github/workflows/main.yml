@@ -18,6 +18,7 @@ jobs:
   build-windows:
     name: Test and package Windows desktop app
     runs-on: windows-latest
+
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
@@ -36,7 +37,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
           cache: pip
           cache-dependency-path: cv/requirements.txt
 
@@ -53,7 +54,8 @@ jobs:
           npm run build
 
       - name: Run CV tests
-        run: python -m pytest cv/tests
+        working-directory: cv
+        run: python -m pytest tests
 
       - name: Download MediaPipe models for packaging
         run: |

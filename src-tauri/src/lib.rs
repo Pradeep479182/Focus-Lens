@@ -321,19 +321,28 @@ fn start_cv_pipeline(
 }
 
 #[tauri::command]
-fn stop_cv_pipeline(
-    request: ServiceRequest<EmptyPayload>,
-    bridge: State<'_, Mutex<CvPipelineBridge>>,
-) -> ServiceResponse<CvPipelineStatus> {
-    if let Some(err_response) = validate_request(&request) {
-        return ServiceResponse {
-            protocol_version: SERVICE_PROTOCOL_VERSION,
-            request_id: err_response.request_id,
-            ok: false,
-            data: None,
-            error: err_response.error,
-        };
-    }
+
+fn stop_pipeline_on_exit(app_handle: &tauri::AppHandle) {
+    let Some(bridge) = app_handle.try_state::<Mutex<CvPipelineBridge>>() else {
+        return;
+    };
+
+    match bridge.lock() {
+        Ok(bridge) => {
+            if let Err(error) = bridge.stop() {
+                eprintln!(
+                    "[FocusLens] Failed to stop CV pipeline during shutdown: {error}"
+                );
+            }
+        }
+        Err(error) => {
+            eprintln!(
+                "[FocusLens] CV pipeline state was poisoned during shutdown: {error}"
+            );
+        }
+    };
+}
+
 
     let guard = match bridge.lock() {
         Ok(g) => g,

@@ -44,7 +44,10 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Update Tauri dependency
+      - name: Fix Tauri notification version
+        run: npm install @tauri-apps/plugin-notification@2.8.0 --save-exact
+
+      - name: Update Tauri Rust dependency
         working-directory: src-tauri
         run: cargo update -p tauri --precise 2.12.3
 
@@ -57,4 +60,3 @@ jobs:
           name: FocusLens-Windows
           path: src-tauri/target/release/bundle/
           if-no-files-found: error
-

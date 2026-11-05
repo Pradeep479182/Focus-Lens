@@ -9,6 +9,10 @@ mod cv_pipeline;
 use config::SERVICE_PROTOCOL_VERSION;
 use cv_pipeline::CvPipelineBridge;
 
+// ---------------------------------------------------------------------------
+// Service protocol types (shared with the frontend)
+// ---------------------------------------------------------------------------
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ServiceRequest<T> {
@@ -38,13 +42,20 @@ struct ServiceError {
 
 impl ServiceError {
     fn static_message(code: &'static str, message: &'static str) -> Self {
-        Self { code, message: message.to_string() }
+        Self {
+            code,
+            message: message.to_string(),
+        }
     }
 
     fn dynamic_message(code: &'static str, message: String) -> Self {
         Self { code, message }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Camera status command
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -145,6 +156,10 @@ fn get_camera_status(
         error: None,
     }
 }
+
+// ---------------------------------------------------------------------------
+// CV pipeline start / stop commands
+// ---------------------------------------------------------------------------
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -332,8 +347,12 @@ fn stop_pipeline_on_exit(app_handle: &tauri::AppHandle) {
                 eprintln!("[FocusLens] Failed to stop CV pipeline during shutdown: {error}");
             }
         }
-        Err(error) => eprintln!("[FocusLens] CV pipeline state was poisoned during shutdown: {error}"),
-    }
+        Err(error) => {
+            eprintln!(
+                "[FocusLens] CV pipeline state was poisoned during shutdown: {error}"
+            );
+        }
+    };
 }
 
 fn resolve_cv_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -349,13 +368,17 @@ fn resolve_cv_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
             return Ok(candidate);
         }
     }
+
     if let Ok(current_dir) = std::env::current_dir() {
         if let Some(candidate) = find_cv_directory(&current_dir) {
             return Ok(candidate);
         }
     }
 
-    Err("The local CV resources could not be found. Reinstall FocusLens or restore its bundled cv/ directory.".to_string())
+    Err(
+        "The local CV resources could not be found. Reinstall FocusLens or restore its bundled cv/ directory."
+            .to_string(),
+    )
 }
 
 fn find_cv_directory(start: &Path) -> Option<PathBuf> {
@@ -427,14 +450,21 @@ mod tests {
     #[test]
     fn frame_submission_rejects_invalid_payloads_and_stopped_pipeline() {
         let bridge = CvPipelineBridge::new();
+
         assert!(bridge.submit_frame(0, 0, 240, "AAAA").is_err());
         assert!(bridge.submit_frame(0, 320, 240, "not-base64").is_err());
-        assert!(bridge.submit_frame(0, 320, 240, "AAAA").unwrap_err().contains("not running"));
+        assert!(bridge
+            .submit_frame(0, 320, 240, "AAAA")
+            .unwrap_err()
+            .contains("not running"));
     }
 
     #[test]
     fn cv_resource_lookup_requires_entry_point_and_finds_parent_directory() {
-        let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let root = std::env::temp_dir().join(format!("focuslens-cv-resource-{unique}"));
         let cv_dir = root.join("cv");
         fs::create_dir_all(&cv_dir).unwrap();
